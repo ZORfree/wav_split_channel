@@ -307,6 +307,7 @@ void MainDialog::SplitChannels() {
     HWND sample_rate_combo = GetDlgItem(hwnd_, IDC_SAMPLE_RATE);
     HWND bits_per_sample_combo = GetDlgItem(hwnd_, IDC_BITS_PER_SAMPLE);
     HWND num_channels_combo = GetDlgItem(hwnd_, IDC_NUM_CHANNELS);
+    HWND num_thread_combo = GetDlgItem(hwnd_, IDC_THREAD_COUNT);
 
     AudioProcessor::AudioFormat format;
     int sample_rate_index = ComboBox_GetCurSel(sample_rate_combo);
@@ -465,6 +466,7 @@ void MainDialog::InitializeControls() {
     HWND sample_rate_combo = GetDlgItem(hwnd_, IDC_SAMPLE_RATE);
     HWND bits_per_sample_combo = GetDlgItem(hwnd_, IDC_BITS_PER_SAMPLE);
     HWND num_channels_combo = GetDlgItem(hwnd_, IDC_NUM_CHANNELS);
+    HWND num_thread_combo = GetDlgItem(hwnd_, IDC_THREAD_COUNT);
 
     // 初始化列表视图
     LVCOLUMN lvc = { 0 };
@@ -505,8 +507,17 @@ void MainDialog::InitializeControls() {
     SendMessage(num_channels_combo, CB_ADDSTRING, 0, (LPARAM)L"6");
     SendMessage(num_channels_combo, CB_ADDSTRING, 0, (LPARAM)L"8");
     // 设置组合框样式为可编辑
-    LONG style = GetWindowLong(num_channels_combo, GWL_STYLE);
-    SetWindowLong(num_channels_combo, GWL_STYLE, style | CBS_DROPDOWN);
+    LONG style_channels = GetWindowLong(num_channels_combo, GWL_STYLE);
+    SetWindowLong(num_channels_combo, GWL_STYLE, style_channels | CBS_DROPDOWN);
+
+    // 初始化多线程选项
+    SendMessage(num_thread_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"1"));
+    SendMessage(num_thread_combo, CB_ADDSTRING, 0, (LPARAM)L"5");
+    SendMessage(num_thread_combo, CB_ADDSTRING, 0, (LPARAM)L"10");
+    SendMessage(num_thread_combo, CB_SETCURSEL, 1, 0); // 默认选择5线程
+    // 设置组合框样式为可编辑
+    LONG style_thread = GetWindowLong(num_thread_combo, GWL_STYLE);
+    SetWindowLong(num_thread_combo, GWL_STYLE, style_thread | CBS_DROPDOWN);
 
     // 初始化输出格式选项
     HWND output_format_combo = GetDlgItem(hwnd_, IDC_OUTPUT_FORMAT);

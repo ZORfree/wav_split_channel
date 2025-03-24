@@ -23,7 +23,8 @@
 #define IDC_BITS_PER_SAMPLE            1004
 #define IDC_NUM_CHANNELS               1005
 #define IDC_OUTPUT_FORMAT              1006
-#define IDD_SETTINGS_DIALOG             1007
+#define IDC_THREAD_COUNT               1007
+#define IDD_SETTINGS_DIALOG             1008
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
 #endif
