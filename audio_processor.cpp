@@ -189,3 +189,7 @@ int AudioProcessor::GetProgress() const {
 void AudioProcessor::SetOutputFormat(OutputFormat format) {
     output_format_ = format;
 }
+
+AudioProcessor::OutputFormat AudioProcessor::GetOutputFormat() const {
+    return output_format_;
+}

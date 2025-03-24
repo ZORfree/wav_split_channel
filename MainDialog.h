@@ -48,4 +48,14 @@ private:
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::vector<std::wstring> file_list_;
     static MainDialog* instance_;
+    
+    // 工作线程相关
+    HANDLE worker_thread_;
+    bool is_processing_;
+    
+    // 工作线程函数
+    static DWORD WINAPI ProcessFilesThreadProc(LPVOID lpParam);
+    
+    // 处理单个文件
+    bool ProcessSingleFile(const std::wstring& file, const std::wstring& output_dir, AudioProcessor::AudioFormat& format, AudioProcessor::OutputFormat output_format);
 };

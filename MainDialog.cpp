@@ -8,11 +8,19 @@
 
 MainDialog* MainDialog::instance_ = nullptr;
 
-MainDialog::MainDialog() : hwnd_(nullptr), audio_processor_(std::make_unique<AudioProcessor>()) {
+MainDialog::MainDialog() : hwnd_(nullptr), audio_processor_(std::make_unique<AudioProcessor>()), 
+    worker_thread_(nullptr), is_processing_(false) {
     instance_ = this;
 }
 
 MainDialog::~MainDialog() {
+    // 确保工作线程已经结束
+    if (worker_thread_ != nullptr) {
+        // 等待线程结束，最多等待5秒
+        WaitForSingleObject(worker_thread_, 5000);
+        CloseHandle(worker_thread_);
+        worker_thread_ = nullptr;
+    }
     instance_ = nullptr;
 }
 
@@ -59,6 +67,26 @@ INT_PTR CALLBACK MainDialog::DialogProc(HWND hwnd, UINT message, WPARAM wParam, 
         case WM_DESTROY:
             PostQuitMessage(0);
             return TRUE;
+        // 处理工作线程发送的状态更新消息
+        case WM_USER + 2: {
+            // 更新状态文本
+            std::wstring* status_msg = reinterpret_cast<std::wstring*>(wParam);
+            if (status_msg) {
+                dlg->UpdateStatus(*status_msg);
+                delete status_msg; // 释放内存
+            }
+            return TRUE;
+        }
+        // 处理工作线程发送的错误消息
+        case WM_USER + 3: {
+            // 显示错误消息框
+            std::wstring* error_msg = reinterpret_cast<std::wstring*>(wParam);
+            if (error_msg) {
+                MessageBox(hwnd, error_msg->c_str(), L"错误", MB_OK | MB_ICONERROR);
+                delete error_msg; // 释放内存
+            }
+            return TRUE;
+        }
     }
     return FALSE;
 }
@@ -135,9 +163,22 @@ INT_PTR MainDialog::OnTimer(WPARAM wParam) {
     if (wParam == 1) { // 进度更新定时器
         int progress = audio_processor_->GetProgress();
         UpdateProgress(progress);
-        if (progress >= 100) {
-            KillTimer(hwnd_, 1);
+        
+        // 检查工作线程是否完成
+        if (is_processing_ && worker_thread_ != nullptr) {
+            DWORD exitCode = 0;
+            if (GetExitCodeThread(worker_thread_, &exitCode) && exitCode != STILL_ACTIVE) {
+                // 线程已完成
+                CloseHandle(worker_thread_);
+                worker_thread_ = nullptr;
+                is_processing_ = false;
+                KillTimer(hwnd_, 1);
+                
+                // 更新状态
+                UpdateStatus(L"处理完成");
+            }
         }
+        
         return static_cast<INT_PTR>(TRUE);
     }
     return static_cast<INT_PTR>(FALSE);
@@ -231,6 +272,12 @@ void MainDialog::SplitChannels() {
         return;
     }
 
+    // 如果已经在处理中，不要重复启动
+    if (is_processing_) {
+        MessageBox(hwnd_, L"正在处理文件，请等待当前任务完成", L"提示", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
     // 设置进度回调函数
     audio_processor_->SetProgressCallback([this](int progress) {
         // 使用PostMessage异步更新进度，避免阻塞处理线程
@@ -292,55 +339,114 @@ void MainDialog::SplitChannels() {
     // 重置进度条
     SendMessage(progress_bar_, PBM_SETPOS, 0, 0);
     
+    // 获取输出格式设置
+    HWND output_format_combo = GetDlgItem(hwnd_, IDC_OUTPUT_FORMAT);
+    int output_format = ComboBox_GetCurSel(output_format_combo);
+    AudioProcessor::OutputFormat audio_output_format = output_format == 0 ? 
+        AudioProcessor::OutputFormat::WAV : AudioProcessor::OutputFormat::PCM;
+    audio_processor_->SetOutputFormat(audio_output_format);
+    
+    // 标记为正在处理
+    is_processing_ = true;
+    UpdateStatus(L"正在处理文件...");
+    
+    // 创建工作线程处理文件
+    worker_thread_ = CreateThread(
+        nullptr,                   // 默认安全属性
+        0,                          // 默认堆栈大小
+        ProcessFilesThreadProc,     // 线程函数
+        this,                       // 线程参数
+        0,                          // 默认创建标志
+        nullptr                    // 不接收线程ID
+    );
+    
+    if (worker_thread_ == nullptr) {
+        is_processing_ = false;
+        MessageBox(hwnd_, L"创建工作线程失败", L"错误", MB_OK | MB_ICONERROR);
+        return;
+    }
+    
+    // 设置定时器，定期更新UI
+    SetTimer(hwnd_, 1, 100, nullptr);
+}
+
+// 工作线程函数，处理所有文件
+DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
+    MainDialog* dlg = static_cast<MainDialog*>(lpParam);
+    if (!dlg) return 1;
+    
+    // 开始计时
+    LARGE_INTEGER frequency, start_time;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&start_time);
+    
+    // 获取音频参数设置
+    AudioProcessor::AudioFormat format = dlg->audio_processor_->GetAudioFormat();
+    AudioProcessor::OutputFormat output_format = dlg->audio_processor_->GetOutputFormat();
+    
     // 开始处理文件
     bool all_success = true;
-    for (const auto& file : file_list_) {
-        UpdateStatus(L"正在加载: " + std::filesystem::path(file).filename().wstring());
-        
-        if (!audio_processor_->LoadWavFile(file)) {
-            MessageBox(hwnd_, L"无法加载音频文件", L"错误", MB_OK | MB_ICONERROR);
-            all_success = false;
-            continue;
-        }
+    int total_files = static_cast<int>(dlg->file_list_.size());
+    int processed_files = 0;
+    
+    for (const auto& file : dlg->file_list_) {
+        // 使用PostMessage更新状态，避免直接调用UI函数
+        std::wstring status_msg = L"正在加载: " + std::filesystem::path(file).filename().wstring();
+        PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
         
         // 获取输入文件的目录作为输出目录
         std::wstring output_dir = std::filesystem::path(file).parent_path().wstring();
         
-        // 获取输出格式设置
-        HWND output_format_combo = GetDlgItem(hwnd_, IDC_OUTPUT_FORMAT);
-        int output_format = ComboBox_GetCurSel(output_format_combo);
-        audio_processor_->SetOutputFormat(output_format == 0 ? AudioProcessor::OutputFormat::WAV : AudioProcessor::OutputFormat::PCM);
-                                
-            UpdateStatus(L"正在处理: " + std::filesystem::path(file).filename().wstring());
-        SetTimer(hwnd_, 1, 100, nullptr); // 启动进度更新定时器
-
-        if (!audio_processor_->SplitChannels(output_dir)) {
-            MessageBox(hwnd_, L"处理音频文件失败", L"错误", MB_OK | MB_ICONERROR);
+        // 处理单个文件
+        if (!dlg->ProcessSingleFile(file, output_dir, format, output_format)) {
             all_success = false;
-            continue;
         }
-
-        // 等待处理完成
-        while (audio_processor_->GetProgress() < 100) {
-            MSG msg;
-            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
-            }
-            Sleep(10);
-        }
-
-        KillTimer(hwnd_, 1); // 停止进度更新定时器
+        
+        // 更新已处理文件数量和总体进度
+        processed_files++;
+        int overall_progress = static_cast<int>((processed_files * 100) / total_files);
+        PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(overall_progress), 0);
     }
-
+    
     // 计算总耗时
     LARGE_INTEGER end_time;
     QueryPerformanceCounter(&end_time);
     double elapsed_seconds = static_cast<double>(end_time.QuadPart - start_time.QuadPart) / frequency.QuadPart;
-
+    
+    // 更新状态
     std::wstring status = (all_success ? L"处理完成" : L"处理完成，但有错误发生");
     status += L"，总耗时：" + std::to_wstring(static_cast<int>(elapsed_seconds)) + L" 秒";
-    UpdateStatus(status);
+    PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status)), 0);
+    
+    return 0;
+}
+
+// 处理单个文件
+bool MainDialog::ProcessSingleFile(const std::wstring& file, const std::wstring& output_dir, 
+                                  AudioProcessor::AudioFormat& format, AudioProcessor::OutputFormat output_format) {
+    // 加载文件
+    if (!audio_processor_->LoadWavFile(file)) {
+        // 使用PostMessage发送错误消息，避免直接调用UI函数
+        PostMessage(hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(L"无法加载音频文件")), 0);
+        return false;
+    }
+    
+    // 设置音频格式
+    audio_processor_->SetAudioFormat(format);
+    audio_processor_->SetOutputFormat(output_format);
+    
+    // 发送状态更新消息
+    std::wstring status_msg = L"正在处理: " + std::filesystem::path(file).filename().wstring();
+    PostMessage(hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
+    
+    // 执行通道拆分
+    if (!audio_processor_->SplitChannels(output_dir)) {
+        // 发送错误消息
+        PostMessage(hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(L"处理音频文件失败")), 0);
+        return false;
+    }
+    
+    return true;
 }
 
 void MainDialog::UpdateProgress(int progress) {

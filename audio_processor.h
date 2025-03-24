@@ -62,6 +62,9 @@ public:
     // 设置输出格式
     void SetOutputFormat(OutputFormat format);
     
+    // 获取输出格式
+    OutputFormat GetOutputFormat() const;
+    
     // 进度回调函数类型定义
     using ProgressCallback = std::function<void(int)>;
 
