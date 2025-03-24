@@ -1,0 +1,25 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+.vs
+.wav_spli*
+x64
+x86
+*.pdb
+*.ilk
+*.obj
+*.exe
+*.dll
+*.log
+*.sln
+*.suo
+*.vcxproj
+*.vcxproj.filters
+*.user
+*.filters
+*.vcxproj.user
+*.vcxproj.filters.user
+*.vs
+*.vsix
+*.vsixmanifest
+*.vsixuser
+*.vsixproj
