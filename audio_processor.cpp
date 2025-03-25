@@ -101,21 +101,26 @@ bool AudioProcessor::SplitChannels(const std::wstring& output_dir) {
         return false;
     }
 
-    // 计算每个采样的字节数
-    int bytes_per_sample = wav_header_->bits_per_sample / 8;
-    int block_align = wav_header_->block_align;
-    int samples_per_channel = wav_header_->data_size / block_align;
+    // 使用用户设置的音频参数
+    int num_channels = audio_format_.num_channels;
+    int bytes_per_sample = audio_format_.bits_per_sample / 8;
+    int block_align = bytes_per_sample * num_channels;
+    int samples_per_channel = audio_data_.size() / block_align;
 
-    // 为每个通道创建数据缓冲区
-    std::vector<std::vector<uint8_t>> channel_data(wav_header_->num_channels);
+    // 为每个通道创建数据缓冲区，确保每次都是全新的缓冲区
+    std::vector<std::vector<uint8_t>> channel_data(num_channels);
     for (auto& channel : channel_data) {
+        // 每个通道的数据大小应该是样本数乘以每个样本的字节数
+        channel.clear(); // 确保缓冲区为空
         channel.reserve(samples_per_channel * bytes_per_sample);
     }
 
     // 分离通道数据
     for (int i = 0; i < samples_per_channel; ++i) {
-        for (int ch = 0; ch < wav_header_->num_channels; ++ch) {
+        for (int ch = 0; ch < num_channels; ++ch) {
+            // 计算当前样本中该通道数据的起始位置
             int src_pos = i * block_align + ch * bytes_per_sample;
+            // 只复制该通道的数据
             for (int b = 0; b < bytes_per_sample; ++b) {
                 channel_data[ch].push_back(audio_data_[src_pos + b]);
             }
@@ -135,7 +140,7 @@ bool AudioProcessor::SplitChannels(const std::wstring& output_dir) {
     std::wstring stem = input_path.stem().wstring();
     std::wstring parent_path = input_path.parent_path().wstring();
     
-    for (int ch = 0; ch < wav_header_->num_channels; ++ch) {
+    for (int ch = 0; ch < num_channels; ++ch) {
         std::wstring output_path = (std::filesystem::path(parent_path) / 
             (stem + L"_channel" + std::to_wstring(ch + 1) + 
              (output_format_ == OutputFormat::WAV ? L".wav" : L".pcm"))).wstring();
@@ -159,7 +164,8 @@ bool AudioProcessor::WriteSingleChannelWav(const std::wstring& file_path,
         // 创建单通道WAV文件头
         WAVHeader single_channel_header = *wav_header_;
         single_channel_header.num_channels = 1;
-        single_channel_header.block_align = single_channel_header.bits_per_sample / 8;
+        // 正确计算单通道的block_align和byte_rate
+        single_channel_header.block_align = single_channel_header.bits_per_sample / 8 * single_channel_header.num_channels; // 确保block_align正确反映单通道
         single_channel_header.byte_rate = single_channel_header.sample_rate * single_channel_header.block_align;
         single_channel_header.data_size = static_cast<uint32_t>(channel_data.size());
         single_channel_header.file_size = single_channel_header.data_size + sizeof(WAVHeader) - 8;
