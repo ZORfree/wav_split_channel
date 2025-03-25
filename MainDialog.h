@@ -7,6 +7,10 @@
 #include <string>
 #include <memory>
 #include <commctrl.h>
+#include <queue>
+#include <mutex>
+#include <atomic>
+#include <condition_variable>
 
 class MainDialog {
 public:
@@ -53,9 +57,42 @@ private:
     HANDLE worker_thread_;
     bool is_processing_;
     
+    // 线程池相关
+    struct FileTask {
+        std::wstring file_path;
+        std::wstring output_dir;
+        AudioProcessor::AudioFormat format;
+        AudioProcessor::OutputFormat output_format;
+    };
+    
+    std::queue<FileTask> task_queue_;
+    std::mutex task_mutex_;
+    std::condition_variable task_cv_;
+    std::vector<HANDLE> worker_threads_;
+    std::atomic<int> active_threads_;
+    std::atomic<int> completed_files_;
+    std::atomic<int> total_files_;
+    int max_threads_;
+    bool shutdown_threads_;
+    
     // 工作线程函数
     static DWORD WINAPI ProcessFilesThreadProc(LPVOID lpParam);
     
+    // 工作线程池函数
+    static DWORD WINAPI WorkerThreadProc(LPVOID lpParam);
+    
     // 处理单个文件
     bool ProcessSingleFile(const std::wstring& file, const std::wstring& output_dir, AudioProcessor::AudioFormat& format, AudioProcessor::OutputFormat output_format);
+    
+    // 初始化线程池
+    void InitThreadPool(int thread_count);
+    
+    // 关闭线程池
+    void ShutdownThreadPool();
+    
+    // 添加任务到队列
+    void AddTask(const FileTask& task);
+    
+    // 获取任务从队列
+    bool GetTask(FileTask& task);
 };

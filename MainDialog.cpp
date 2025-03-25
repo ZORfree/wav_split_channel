@@ -9,7 +9,8 @@
 MainDialog* MainDialog::instance_ = nullptr;
 
 MainDialog::MainDialog() : hwnd_(nullptr), audio_processor_(std::make_unique<AudioProcessor>()), 
-    worker_thread_(nullptr), is_processing_(false) {
+    worker_thread_(nullptr), is_processing_(false), active_threads_(0), completed_files_(0),
+    total_files_(0), max_threads_(1), shutdown_threads_(false) {
     instance_ = this;
 }
 
@@ -21,6 +22,10 @@ MainDialog::~MainDialog() {
         CloseHandle(worker_thread_);
         worker_thread_ = nullptr;
     }
+    
+    // 关闭线程池
+    ShutdownThreadPool();
+    
     instance_ = nullptr;
 }
 
@@ -161,21 +166,57 @@ INT_PTR MainDialog::OnNotify(WPARAM wParam, LPARAM lParam) {
 
 INT_PTR MainDialog::OnTimer(WPARAM wParam) {
     if (wParam == 1) { // 进度更新定时器
-        int progress = audio_processor_->GetProgress();
-        UpdateProgress(progress);
+        // 获取单个文件的处理进度
+        int file_progress = audio_processor_->GetProgress();
+        
+        // 计算总体进度
+        int overall_progress = 0;
+        if (total_files_ > 0) {
+            // 总进度 = 已完成文件的进度 + 当前处理文件的进度占比
+            // 考虑到多线程处理，需要计算当前活动线程的平均进度
+            int active_progress = 0;
+            if (active_threads_ > 0) {
+                active_progress = file_progress * active_threads_;
+            }
+            overall_progress = static_cast<int>((completed_files_ * 100 + active_progress) / total_files_);
+            if (overall_progress > 100) overall_progress = 100;
+        }
+        
+        // 更新进度条
+        UpdateProgress(overall_progress);
+        
+        // 更新状态文本
+        std::wstring status = L"正在处理文件... " + std::to_wstring(completed_files_) + L"/" + std::to_wstring(total_files_);
+        status += L" (" + std::to_wstring(overall_progress) + L"%)";
+        if (active_threads_ > 0) {
+            status += L" - 活动线程: " + std::to_wstring(active_threads_);
+        }
+        UpdateStatus(status);
         
         // 检查工作线程是否完成
         if (is_processing_ && worker_thread_ != nullptr) {
             DWORD exitCode = 0;
             if (GetExitCodeThread(worker_thread_, &exitCode) && exitCode != STILL_ACTIVE) {
-                // 线程已完成
-                CloseHandle(worker_thread_);
-                worker_thread_ = nullptr;
-                is_processing_ = false;
-                KillTimer(hwnd_, 1);
-                
-                // 更新状态
-                UpdateStatus(L"处理完成");
+                // 主线程已完成，检查是否所有工作线程也已完成
+                if (active_threads_ == 0) {
+                    // 关闭线程池
+                    ShutdownThreadPool();
+                    
+                    // 清理资源
+                    CloseHandle(worker_thread_);
+                    worker_thread_ = nullptr;
+                    is_processing_ = false;
+                    KillTimer(hwnd_, 1);
+                    
+                    // 计算总耗时
+                    LARGE_INTEGER end_time, frequency;
+                    QueryPerformanceCounter(&end_time);
+                    QueryPerformanceFrequency(&frequency);
+                    
+                    // 更新状态
+                    std::wstring complete_status = L"处理完成，共处理 " + std::to_wstring(completed_files_) + L" 个文件";
+                    UpdateStatus(complete_status);
+                }
             }
         }
         
@@ -347,9 +388,22 @@ void MainDialog::SplitChannels() {
         AudioProcessor::OutputFormat::WAV : AudioProcessor::OutputFormat::PCM;
     audio_processor_->SetOutputFormat(audio_output_format);
     
+    // 获取线程数设置
+    int thread_count = GetDlgItemInt(hwnd_, IDC_THREAD_COUNT, nullptr, FALSE);
+    if (thread_count <= 0) {
+        thread_count = 5; // 默认使用5个线程
+    }
+    
     // 标记为正在处理
     is_processing_ = true;
     UpdateStatus(L"正在处理文件...");
+    
+    // 初始化线程池
+    InitThreadPool(thread_count);
+    
+    // 重置计数器
+    completed_files_ = 0;
+    total_files_ = static_cast<int>(file_list_.size());
     
     // 创建工作线程处理文件
     worker_thread_ = CreateThread(
@@ -363,6 +417,7 @@ void MainDialog::SplitChannels() {
     
     if (worker_thread_ == nullptr) {
         is_processing_ = false;
+        ShutdownThreadPool();
         MessageBox(hwnd_, L"创建工作线程失败", L"错误", MB_OK | MB_ICONERROR);
         return;
     }
@@ -385,28 +440,39 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
     AudioProcessor::AudioFormat format = dlg->audio_processor_->GetAudioFormat();
     AudioProcessor::OutputFormat output_format = dlg->audio_processor_->GetOutputFormat();
     
-    // 开始处理文件
-    bool all_success = true;
-    int total_files = static_cast<int>(dlg->file_list_.size());
-    int processed_files = 0;
+    // 更新状态
+    PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(L"正在准备处理文件...")), 0);
     
+    // 将所有文件添加到任务队列
     for (const auto& file : dlg->file_list_) {
-        // 使用PostMessage更新状态，避免直接调用UI函数
-        std::wstring status_msg = L"正在加载: " + std::filesystem::path(file).filename().wstring();
-        PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
-        
         // 获取输入文件的目录作为输出目录
         std::wstring output_dir = std::filesystem::path(file).parent_path().wstring();
         
-        // 处理单个文件
-        if (!dlg->ProcessSingleFile(file, output_dir, format, output_format)) {
-            all_success = false;
-        }
+        // 创建任务并添加到队列
+        FileTask task;
+        task.file_path = file;
+        task.output_dir = output_dir;
+        task.format = format;
+        task.output_format = output_format;
         
-        // 更新已处理文件数量和总体进度
-        processed_files++;
-        int overall_progress = static_cast<int>((processed_files * 100) / total_files);
+        dlg->AddTask(task);
+    }
+    
+    // 更新状态
+    PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(L"正在处理文件...")), 0);
+    
+    // 等待所有任务完成
+    while (dlg->completed_files_ < dlg->total_files_ && !dlg->shutdown_threads_) {
+        Sleep(100); // 每100毫秒检查一次
+        
+        // 更新总体进度
+        int overall_progress = static_cast<int>((dlg->completed_files_ * 100) / dlg->total_files_);
         PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(overall_progress), 0);
+        
+        // 更新状态文本
+        std::wstring status = L"正在处理文件... " + std::to_wstring(dlg->completed_files_) + L"/" + std::to_wstring(dlg->total_files_);
+        status += L" (" + std::to_wstring(overall_progress) + L"%)";
+        PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status)), 0);
     }
     
     // 计算总耗时
@@ -415,9 +481,93 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
     double elapsed_seconds = static_cast<double>(end_time.QuadPart - start_time.QuadPart) / frequency.QuadPart;
     
     // 更新状态
-    std::wstring status = (all_success ? L"处理完成" : L"处理完成，但有错误发生");
+    std::wstring status = L"处理完成";
     status += L"，总耗时：" + std::to_wstring(static_cast<int>(elapsed_seconds)) + L" 秒";
+    status += L"，共处理 " + std::to_wstring(dlg->completed_files_) + L" 个文件";
     PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status)), 0);
+    
+    return 0;
+}
+
+// 添加任务到队列
+void MainDialog::AddTask(const FileTask& task) {
+    {
+        std::lock_guard<std::mutex> lock(task_mutex_);
+        task_queue_.push(task);
+    }
+    task_cv_.notify_one();
+}
+
+// 获取任务从队列
+bool MainDialog::GetTask(FileTask& task) {
+    std::unique_lock<std::mutex> lock(task_mutex_);
+    
+    // 等待任务或关闭信号
+    task_cv_.wait(lock, [this] {
+        return !task_queue_.empty() || shutdown_threads_;
+    });
+    
+    // 如果收到关闭信号且队列为空，返回false
+    if (task_queue_.empty()) {
+        return false;
+    }
+    
+    // 获取任务
+    task = task_queue_.front();
+    task_queue_.pop();
+    return true;
+}
+
+// 工作线程函数，处理任务队列中的文件
+DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
+    MainDialog* dlg = static_cast<MainDialog*>(lpParam);
+    if (!dlg) return 1;
+    
+    // 创建每个线程自己的AudioProcessor实例
+    std::unique_ptr<AudioProcessor> thread_audio_processor = std::make_unique<AudioProcessor>();
+    
+    // 设置进度回调函数
+    thread_audio_processor->SetProgressCallback([dlg](int progress) {
+        // 使用PostMessage异步更新进度，避免阻塞处理线程
+        PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(progress), 0);
+    });
+    
+    // 循环处理任务队列中的任务
+    FileTask task;
+    while (dlg->GetTask(task)) {
+        // 增加活动线程计数
+        dlg->active_threads_++;
+        
+        // 加载文件
+        if (!thread_audio_processor->LoadWavFile(task.file_path)) {
+            // 发送错误消息
+            std::wstring error_msg = L"无法加载音频文件: " + std::filesystem::path(task.file_path).filename().wstring();
+            PostMessage(dlg->hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(error_msg)), 0);
+        } else {
+            // 设置音频格式
+            thread_audio_processor->SetAudioFormat(task.format);
+            thread_audio_processor->SetOutputFormat(task.output_format);
+            
+            // 发送状态更新消息
+            std::wstring status_msg = L"正在处理: " + std::filesystem::path(task.file_path).filename().wstring();
+            PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
+            
+            // 执行通道拆分
+            if (!thread_audio_processor->SplitChannels(task.output_dir)) {
+                // 发送错误消息
+                std::wstring error_msg = L"处理音频文件失败: " + std::filesystem::path(task.file_path).filename().wstring();
+                PostMessage(dlg->hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(error_msg)), 0);
+            }
+        }
+        
+        // 更新已完成文件数量和总体进度
+        dlg->completed_files_++;
+        int overall_progress = static_cast<int>((dlg->completed_files_ * 100) / dlg->total_files_);
+        PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(overall_progress), 0);
+        
+        // 减少活动线程计数
+        dlg->active_threads_--;
+    }
     
     return 0;
 }
@@ -550,6 +700,19 @@ void MainDialog::LoadSettings() {
             HWND output_format_combo = GetDlgItem(hwnd_, IDC_OUTPUT_FORMAT);
             SendMessage(output_format_combo, CB_SETCURSEL, value, 0);
         }
+        
+        // 加载线程数设置
+        if (RegQueryValueEx(hKey, L"ThreadCount", nullptr, nullptr, (LPBYTE)&value, &size) == ERROR_SUCCESS) {
+            HWND thread_count_combo = GetDlgItem(hwnd_, IDC_THREAD_COUNT);
+            if (value > 0) {
+                SetDlgItemInt(hwnd_, IDC_THREAD_COUNT, value, FALSE);
+            } else {
+                SetDlgItemInt(hwnd_, IDC_THREAD_COUNT, 5, FALSE); // 默认5个线程
+            }
+        } else {
+            // 如果没有保存过线程数设置，设置默认值
+            SetDlgItemInt(hwnd_, IDC_THREAD_COUNT, 5, FALSE); // 默认5个线程
+        }
 
         RegCloseKey(hKey);
     }
@@ -574,7 +737,64 @@ void MainDialog::SaveSettings() {
         HWND output_format_combo = GetDlgItem(hwnd_, IDC_OUTPUT_FORMAT);
         value = SendMessage(output_format_combo, CB_GETCURSEL, 0, 0);
         RegSetValueEx(hKey, L"OutputFormat", 0, REG_DWORD, (LPBYTE)&value, sizeof(DWORD));
+        
+        // 保存线程数设置
+        HWND thread_count_combo = GetDlgItem(hwnd_, IDC_THREAD_COUNT);
+        value = GetDlgItemInt(hwnd_, IDC_THREAD_COUNT, nullptr, FALSE);
+        RegSetValueEx(hKey, L"ThreadCount", 0, REG_DWORD, (LPBYTE)&value, sizeof(DWORD));
 
         RegCloseKey(hKey);
     }
+}
+
+// 初始化线程池
+void MainDialog::InitThreadPool(int thread_count) {
+    // 确保先关闭已有的线程池
+    ShutdownThreadPool();
+    
+    // 设置最大线程数
+    max_threads_ = thread_count > 0 ? thread_count : 1;
+    shutdown_threads_ = false;
+    active_threads_ = 0;
+    
+    // 创建工作线程
+    for (int i = 0; i < max_threads_; i++) {
+        HANDLE thread = CreateThread(
+            nullptr,                   // 默认安全属性
+            0,                          // 默认堆栈大小
+            WorkerThreadProc,           // 线程函数
+            this,                       // 线程参数
+            0,                          // 默认创建标志
+            nullptr                    // 不接收线程ID
+        );
+        
+        if (thread != nullptr) {
+            worker_threads_.push_back(thread);
+        }
+    }
+}
+
+// 关闭线程池
+void MainDialog::ShutdownThreadPool() {
+    // 标记线程池关闭
+    shutdown_threads_ = true;
+    
+    // 通知所有等待的线程
+    task_cv_.notify_all();
+    
+    // 等待所有线程结束
+    if (!worker_threads_.empty()) {
+        WaitForMultipleObjects(static_cast<DWORD>(worker_threads_.size()), worker_threads_.data(), TRUE, 5000);
+        
+        // 关闭所有线程句柄
+        for (HANDLE thread : worker_threads_) {
+            CloseHandle(thread);
+        }
+        
+        worker_threads_.clear();
+    }
+    
+    // 清空任务队列
+    std::queue<FileTask> empty;
+    std::swap(task_queue_, empty);
 }

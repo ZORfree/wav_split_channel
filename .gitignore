@@ -2,6 +2,7 @@
 
 .vs
 .wav_spli*
+.git
 x64
 x86
 *.pdb
@@ -23,3 +24,4 @@ x86
 *.vsixmanifest
 *.vsixuser
 *.vsixproj
+*.svg
