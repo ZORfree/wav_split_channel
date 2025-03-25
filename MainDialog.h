@@ -11,6 +11,7 @@
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
+#include <map>
 
 class MainDialog {
 public:
@@ -51,6 +52,7 @@ private:
     HWND status_text_;
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::vector<std::wstring> file_list_;
+    std::map<std::wstring, int> file_progress_; // 存储每个文件的处理进度
     static MainDialog* instance_;
     
     // 工作线程相关
@@ -67,6 +69,7 @@ private:
     
     std::queue<FileTask> task_queue_;
     std::mutex task_mutex_;
+    std::mutex progress_mutex_; // 用于保护文件进度映射的互斥锁
     std::condition_variable task_cv_;
     std::vector<HANDLE> worker_threads_;
     std::atomic<int> active_threads_;

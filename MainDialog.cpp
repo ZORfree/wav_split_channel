@@ -4,6 +4,7 @@
 #include <windowsx.h>
 #include <filesystem>
 #include <commctrl.h>
+#include <map>
 
 
 MainDialog* MainDialog::instance_ = nullptr;
@@ -47,6 +48,13 @@ bool MainDialog::Create(HINSTANCE hInstance) {
     return true;
 }
 
+// 定义列表项更新结构体
+struct ListItemUpdate {
+    int item_index;
+    int sub_item_index;
+    std::wstring* text;
+};
+
 INT_PTR CALLBACK MainDialog::DialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_INITDIALOG) {
         SetWindowLongPtr(hwnd, DWLP_USER, lParam);
@@ -89,6 +97,25 @@ INT_PTR CALLBACK MainDialog::DialogProc(HWND hwnd, UINT message, WPARAM wParam, 
             if (error_msg) {
                 MessageBox(hwnd, error_msg->c_str(), L"错误", MB_OK | MB_ICONERROR);
                 delete error_msg; // 释放内存
+            }
+            return TRUE;
+        }
+        // 处理列表项更新消息
+        case WM_USER + 4: {
+            // 更新列表项
+            ListItemUpdate* update_info = reinterpret_cast<ListItemUpdate*>(wParam);
+            if (update_info && update_info->text) {
+                // 设置列表项文本
+                LVITEM lvi = { 0 };
+                lvi.mask = LVIF_TEXT;
+                lvi.iItem = update_info->item_index;
+                lvi.iSubItem = update_info->sub_item_index;
+                lvi.pszText = const_cast<LPWSTR>(update_info->text->c_str());
+                ListView_SetItem(dlg->list_view_, &lvi);
+                
+                // 释放内存
+                delete update_info->text;
+                delete update_info;
             }
             return TRUE;
         }
@@ -172,13 +199,26 @@ INT_PTR MainDialog::OnTimer(WPARAM wParam) {
         // 计算总体进度
         int overall_progress = 0;
         if (total_files_ > 0) {
-            // 总进度 = 已完成文件的进度 + 当前处理文件的进度占比
-            // 考虑到多线程处理，需要计算当前活动线程的平均进度
-            int active_progress = 0;
-            if (active_threads_ > 0) {
-                active_progress = file_progress * active_threads_;
+            // 计算所有文件的总进度
+            int total_progress = 0;
+            
+            // 锁定进度映射，防止多线程冲突
+            std::lock_guard<std::mutex> lock(progress_mutex_);
+            
+            // 遍历所有文件的进度
+            for (const auto& progress_pair : file_progress_) {
+                total_progress += progress_pair.second;
             }
-            overall_progress = static_cast<int>((completed_files_ * 100 + active_progress) / total_files_);
+            
+            // 计算平均进度
+            if (!file_progress_.empty()) {
+                overall_progress = static_cast<int>(total_progress / total_files_);
+            } else {
+                // 如果没有文件进度信息，使用已完成文件数计算
+                overall_progress = static_cast<int>((completed_files_ * 100) / total_files_);
+            }
+            
+            // 确保进度不超过100%
             if (overall_progress > 100) overall_progress = 100;
         }
         
@@ -538,10 +578,42 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
         // 增加活动线程计数
         dlg->active_threads_++;
         
+        // 获取文件名和在列表中的索引
+        std::wstring filename = std::filesystem::path(task.file_path).filename().wstring();
+        int file_index = -1;
+        
+        // 查找文件在列表中的索引
+        for (int i = 0; i < dlg->file_list_.size(); i++) {
+            if (std::filesystem::path(dlg->file_list_[i]).filename().wstring() == filename) {
+                file_index = i;
+                break;
+            }
+        }
+        
+        // 初始化进度为0%
+        if (file_index >= 0) {
+            // 使用PostMessage更新列表项的进度
+            WCHAR progress_text[16];
+            swprintf_s(progress_text, L"0%%");
+            
+            // 创建一个结构体来传递更新信息
+            struct ListItemUpdate* update_info = new ListItemUpdate;
+            update_info->item_index = file_index;
+            update_info->sub_item_index = 2; // 进度列
+            update_info->text = new std::wstring(progress_text);
+            
+            // 发送消息更新列表项
+            PostMessage(dlg->hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
+            
+            // 初始化文件进度
+            std::lock_guard<std::mutex> lock(dlg->progress_mutex_);
+            dlg->file_progress_[task.file_path] = 0;
+        }
+        
         // 加载文件
         if (!thread_audio_processor->LoadWavFile(task.file_path)) {
             // 发送错误消息
-            std::wstring error_msg = L"无法加载音频文件: " + std::filesystem::path(task.file_path).filename().wstring();
+            std::wstring error_msg = L"无法加载音频文件: " + filename;
             PostMessage(dlg->hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(error_msg)), 0);
         } else {
             // 设置音频格式
@@ -549,14 +621,60 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
             thread_audio_processor->SetOutputFormat(task.output_format);
             
             // 发送状态更新消息
-            std::wstring status_msg = L"正在处理: " + std::filesystem::path(task.file_path).filename().wstring();
+            std::wstring status_msg = L"正在处理: " + filename;
             PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
+            
+            // 设置进度回调函数，用于更新特定文件的进度
+            thread_audio_processor->SetProgressCallback([dlg, task, file_index](int progress) {
+                // 更新文件进度
+                {
+                    std::lock_guard<std::mutex> lock(dlg->progress_mutex_);
+                    dlg->file_progress_[task.file_path] = progress;
+                }
+                
+                // 如果找到了文件索引，更新列表项
+                if (file_index >= 0) {
+                    // 格式化进度文本
+                    WCHAR progress_text[16];
+                    swprintf_s(progress_text, L"%d%%", progress);
+                    
+                    // 创建一个结构体来传递更新信息
+                    struct ListItemUpdate* update_info = new ListItemUpdate;
+                    update_info->item_index = file_index;
+                    update_info->sub_item_index = 2; // 进度列
+                    update_info->text = new std::wstring(progress_text);
+                    
+                    // 发送消息更新列表项
+                    PostMessage(dlg->hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
+                }
+                
+                // 使用PostMessage异步更新总进度，避免阻塞处理线程
+                PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(progress), 0);
+            });
             
             // 执行通道拆分
             if (!thread_audio_processor->SplitChannels(task.output_dir)) {
                 // 发送错误消息
-                std::wstring error_msg = L"处理音频文件失败: " + std::filesystem::path(task.file_path).filename().wstring();
+                std::wstring error_msg = L"处理音频文件失败: " + filename;
                 PostMessage(dlg->hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(error_msg)), 0);
+            }
+            else if (file_index >= 0) {
+                // 处理成功，设置进度为100%
+                WCHAR progress_text[16];
+                swprintf_s(progress_text, L"100%%");
+                
+                // 创建一个结构体来传递更新信息
+                struct ListItemUpdate* update_info = new ListItemUpdate;
+                update_info->item_index = file_index;
+                update_info->sub_item_index = 2; // 进度列
+                update_info->text = new std::wstring(progress_text);
+                
+                // 发送消息更新列表项
+                PostMessage(dlg->hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
+                
+                // 更新文件进度
+                std::lock_guard<std::mutex> lock(dlg->progress_mutex_);
+                dlg->file_progress_[task.file_path] = 100;
             }
         }
         
@@ -629,6 +747,11 @@ void MainDialog::InitializeControls() {
     lvc.cx = 100;
     lvc.pszText = const_cast<LPWSTR>(L"文件大小");
     ListView_InsertColumn(list_view_, 1, &lvc);
+    
+    // 添加处理进度列
+    lvc.cx = 100;
+    lvc.pszText = const_cast<LPWSTR>(L"处理进度");
+    ListView_InsertColumn(list_view_, 2, &lvc);
 
     // 启用列表视图的完整行选择、网格线和多选功能
     ListView_SetExtendedListViewStyle(list_view_, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
