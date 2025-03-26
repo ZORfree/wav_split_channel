@@ -354,6 +354,24 @@ void MainDialog::SplitChannels() {
         return;
     }
 
+    // 重置所有文件进度为0%
+    for (int i = 0; i < file_list_.size(); ++i) {
+        // 创建进度更新结构体
+        ListItemUpdate* update_info = new ListItemUpdate;
+        update_info->item_index = i;
+        update_info->sub_item_index = 2; // 进度列
+        update_info->text = new std::wstring(L"0%");
+        
+        // 发送消息更新列表项
+        PostMessage(hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
+    }
+
+    // 清空进度记录
+    {
+        std::lock_guard<std::mutex> lock(progress_mutex_);
+        file_progress_.clear();
+    }
+
     // 如果已经在处理中，不要重复启动
     if (is_processing_) {
         MessageBox(hwnd_, L"正在处理文件，请等待当前任务完成", L"提示", MB_OK | MB_ICONINFORMATION);
