@@ -193,26 +193,27 @@ INT_PTR MainDialog::OnNotify(WPARAM wParam, LPARAM lParam) {
 
 INT_PTR MainDialog::OnTimer(WPARAM wParam) {
     if (wParam == 1) { // 进度更新定时器
-        // 获取单个文件的处理进度
-        int file_progress = audio_processor_->GetProgress();
-        
         // 计算总体进度
         int overall_progress = 0;
         if (total_files_ > 0) {
             // 计算所有文件的总进度
-            int total_progress = 0;
+            double total_progress = 0.0;
+            int file_count = 0;
             
             // 锁定进度映射，防止多线程冲突
             std::lock_guard<std::mutex> lock(progress_mutex_);
             
             // 遍历所有文件的进度
             for (const auto& progress_pair : file_progress_) {
-                total_progress += progress_pair.second;
+                // 将每个文件的进度百分比转换为小数后累加
+                total_progress += progress_pair.second / 100.0;
+                file_count++;
             }
             
-            // 计算平均进度
-            if (!file_progress_.empty()) {
-                overall_progress = static_cast<int>(total_progress / total_files_);
+            // 计算总体进度：所有文件进度之和除以文件总数
+            if (file_count > 0) {
+                // 将总进度转换为百分比
+                overall_progress = static_cast<int>((total_progress / total_files_) * 100);
             } else {
                 // 如果没有文件进度信息，使用已完成文件数计算
                 overall_progress = static_cast<int>((completed_files_ * 100) / total_files_);
@@ -225,7 +226,7 @@ INT_PTR MainDialog::OnTimer(WPARAM wParam) {
         // 更新进度条
         UpdateProgress(overall_progress);
         
-        // 更新状态文本
+        // 更新状态文本 - 显示更详细的进度信息
         std::wstring status = L"正在处理文件... " + std::to_wstring(completed_files_) + L"/" + std::to_wstring(total_files_);
         status += L" (" + std::to_wstring(overall_progress) + L"%)";
         if (active_threads_ > 0) {
@@ -566,10 +567,9 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
     // 创建每个线程自己的AudioProcessor实例
     std::unique_ptr<AudioProcessor> thread_audio_processor = std::make_unique<AudioProcessor>();
     
-    // 设置进度回调函数
+    // 设置进度回调函数 - 这个初始回调只用于调试目的
     thread_audio_processor->SetProgressCallback([dlg](int progress) {
-        // 使用PostMessage异步更新进度，避免阻塞处理线程
-        PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(progress), 0);
+        // 不在这里更新进度，而是在每个文件的专用回调中更新
     });
     
     // 循环处理任务队列中的任务
@@ -626,7 +626,7 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
             
             // 设置进度回调函数，用于更新特定文件的进度
             thread_audio_processor->SetProgressCallback([dlg, task, file_index](int progress) {
-                // 更新文件进度
+                // 更新文件进度 - 使用互斥锁确保线程安全
                 {
                     std::lock_guard<std::mutex> lock(dlg->progress_mutex_);
                     dlg->file_progress_[task.file_path] = progress;
@@ -648,8 +648,7 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
                     PostMessage(dlg->hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
                 }
                 
-                // 使用PostMessage异步更新总进度，避免阻塞处理线程
-                PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(progress), 0);
+                // 不在这里触发总进度更新，而是依靠定时器统一更新
             });
             
             // 执行通道拆分
@@ -672,16 +671,17 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
                 // 发送消息更新列表项
                 PostMessage(dlg->hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
                 
-                // 更新文件进度
+                // 确保文件进度设置为100%
                 std::lock_guard<std::mutex> lock(dlg->progress_mutex_);
                 dlg->file_progress_[task.file_path] = 100;
             }
         }
         
-        // 更新已完成文件数量和总体进度
+        // 更新已完成文件数量
         dlg->completed_files_++;
-        int overall_progress = static_cast<int>((dlg->completed_files_ * 100) / dlg->total_files_);
-        PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(overall_progress), 0);
+        
+        // 不在这里计算和发送总体进度，而是依靠定时器统一更新
+        // 这样可以避免多个线程同时更新进度导致的闪烁问题
         
         // 减少活动线程计数
         dlg->active_threads_--;
@@ -719,6 +719,16 @@ bool MainDialog::ProcessSingleFile(const std::wstring& file, const std::wstring&
 }
 
 void MainDialog::UpdateProgress(int progress) {
+    // 确保进度值在有效范围内（0-100）
+    if (progress < 0) progress = 0;
+    if (progress > 100) progress = 100;
+	//获取当前的进度值，如果当前进度值大于新的进度值，则不更新
+	int current_progress = SendMessage(progress_bar_, PBM_GETPOS, 0, 0);
+	if (current_progress >= progress) return;
+
+
+    
+    // 更新进度条位置
     SendMessage(progress_bar_, PBM_SETPOS, progress, 0);
 }
 
