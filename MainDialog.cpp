@@ -228,10 +228,10 @@ INT_PTR MainDialog::OnTimer(WPARAM wParam) {
         
         // 更新状态文本 - 显示更详细的进度信息
         std::wstring status = L"正在处理文件... " + std::to_wstring(completed_files_) + L"/" + std::to_wstring(total_files_);
-        status += L" (" + std::to_wstring(overall_progress) + L"%)";
-        if (active_threads_ > 0) {
-            status += L" - 活动线程: " + std::to_wstring(active_threads_);
-        }
+        //status += L" (" + std::to_wstring(overall_progress) + L"%)";
+        //if (active_threads_ > 0) {
+        //    status += L" - 活动线程: " + std::to_wstring(active_threads_);
+        //}
         UpdateStatus(status);
         
         // 检查工作线程是否完成
@@ -512,7 +512,7 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
         
         // 更新状态文本
         std::wstring status = L"正在处理文件... " + std::to_wstring(dlg->completed_files_) + L"/" + std::to_wstring(dlg->total_files_);
-        status += L" (" + std::to_wstring(overall_progress) + L"%)";
+        //status += L" (" + std::to_wstring(overall_progress) + L"%)";
         PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status)), 0);
     }
     
@@ -733,6 +733,11 @@ void MainDialog::UpdateProgress(int progress) {
 }
 
 void MainDialog::UpdateStatus(const std::wstring& status) {
+	//获取当前的状态文本，如果当前状态文本与新的状态文本相同，则不更新
+	WCHAR current_status[256];
+	GetWindowText(status_text_, current_status, 256);
+	if (wcscmp(current_status, status.c_str()) == 0) return;
+
     SetWindowText(status_text_, status.c_str());
 }
 
