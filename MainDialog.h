@@ -74,6 +74,7 @@ private:
     std::vector<HANDLE> worker_threads_;
     std::atomic<int> active_threads_;
     std::atomic<int> completed_files_;
+    std::atomic<int> error_files_; // 记录处理失败的文件数量
     std::atomic<int> total_files_;
     int max_threads_;
     bool shutdown_threads_;

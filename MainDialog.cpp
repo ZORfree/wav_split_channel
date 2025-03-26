@@ -11,7 +11,7 @@ MainDialog* MainDialog::instance_ = nullptr;
 
 MainDialog::MainDialog() : hwnd_(nullptr), audio_processor_(std::make_unique<AudioProcessor>()), 
     worker_thread_(nullptr), is_processing_(false), active_threads_(0), completed_files_(0),
-    total_files_(0), max_threads_(1), shutdown_threads_(false) {
+    error_files_(0), total_files_(0), max_threads_(1), shutdown_threads_(false) {
     instance_ = this;
 }
 // 
@@ -93,11 +93,11 @@ INT_PTR CALLBACK MainDialog::DialogProc(HWND hwnd, UINT message, WPARAM wParam, 
         // 处理工作线程发送的错误消息
         case WM_USER + 3: {
             // 显示错误消息框
-            std::wstring* error_msg = reinterpret_cast<std::wstring*>(wParam);
-            if (error_msg) {
-                MessageBox(hwnd, error_msg->c_str(), L"错误", MB_OK | MB_ICONERROR);
-                delete error_msg; // 释放内存
-            }
+            // std::wstring* error_msg = reinterpret_cast<std::wstring*>(wParam);
+            // if (error_msg) {
+            //     MessageBox(hwnd, error_msg->c_str(), L"错误", MB_OK | MB_ICONERROR);
+            //     delete error_msg; // 释放内存
+            // }
             return TRUE;
         }
         // 处理列表项更新消息
@@ -462,6 +462,7 @@ void MainDialog::SplitChannels() {
     
     // 重置计数器
     completed_files_ = 0;
+    error_files_ = 0;
     total_files_ = static_cast<int>(file_list_.size());
     
     // 创建工作线程处理文件
@@ -528,9 +529,12 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
         int overall_progress = static_cast<int>((dlg->completed_files_ * 100) / dlg->total_files_);
         PostMessage(dlg->hwnd_, WM_USER + 1, static_cast<WPARAM>(overall_progress), 0);
         
-        // 更新状态文本
+        // 更新状态文本，包含成功和失败文件数量
         std::wstring status = L"正在处理文件... " + std::to_wstring(dlg->completed_files_) + L"/" + std::to_wstring(dlg->total_files_);
-        //status += L" (" + std::to_wstring(overall_progress) + L"%)";
+        if (dlg->error_files_ > 0) {
+            status += L" (成功: " + std::to_wstring(dlg->completed_files_ - dlg->error_files_) + 
+                     L", 失败: " + std::to_wstring(dlg->error_files_) + L")";
+        }
         PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status)), 0);
     }
     
@@ -539,10 +543,14 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
     QueryPerformanceCounter(&end_time);
     double elapsed_seconds = static_cast<double>(end_time.QuadPart - start_time.QuadPart) / frequency.QuadPart;
     
-    // 更新状态
+    // 更新状态，包含成功和失败文件数量的详细统计
     std::wstring status = L"处理完成";
     status += L"，总耗时：" + std::to_wstring(static_cast<int>(elapsed_seconds)) + L" 秒";
     status += L"，共处理 " + std::to_wstring(dlg->completed_files_) + L" 个文件";
+    if (dlg->error_files_ > 0) {
+        status += L" (成功: " + std::to_wstring(dlg->completed_files_ - dlg->error_files_) + 
+                 L", 失败: " + std::to_wstring(dlg->error_files_) + L")";
+    }
     PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status)), 0);
     
     return 0;
@@ -633,6 +641,21 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
             // 发送错误消息
             std::wstring error_msg = L"无法加载音频文件: " + filename;
             PostMessage(dlg->hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(error_msg)), 0);
+            
+            // 更新列表项显示错误信息
+            if (file_index >= 0) {
+                // 创建一个结构体来传递更新信息
+                struct ListItemUpdate* update_info = new ListItemUpdate;
+                update_info->item_index = file_index;
+                update_info->sub_item_index = 2; // 进度列
+                update_info->text = new std::wstring(L"加载失败");
+                
+                // 发送消息更新列表项
+                PostMessage(dlg->hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
+            }
+            
+            // 增加错误文件计数
+            dlg->error_files_++;
         } else {
             // 设置音频格式
             thread_audio_processor->SetAudioFormat(task.format);
@@ -674,6 +697,21 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
                 // 发送错误消息
                 std::wstring error_msg = L"处理音频文件失败: " + filename;
                 PostMessage(dlg->hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(error_msg)), 0);
+                
+                // 更新列表项显示错误信息
+                if (file_index >= 0) {
+                    // 创建一个结构体来传递更新信息
+                    struct ListItemUpdate* update_info = new ListItemUpdate;
+                    update_info->item_index = file_index;
+                    update_info->sub_item_index = 2; // 进度列
+                    update_info->text = new std::wstring(L"处理失败");
+                    
+                    // 发送消息更新列表项
+                    PostMessage(dlg->hwnd_, WM_USER + 4, reinterpret_cast<WPARAM>(update_info), 0);
+                }
+                
+                // 增加错误文件计数
+                dlg->error_files_++;
             }
             else if (file_index >= 0) {
                 // 处理成功，设置进度为100%
