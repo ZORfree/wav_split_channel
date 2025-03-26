@@ -14,7 +14,7 @@ MainDialog::MainDialog() : hwnd_(nullptr), audio_processor_(std::make_unique<Aud
     total_files_(0), max_threads_(1), shutdown_threads_(false) {
     instance_ = this;
 }
-
+// 
 MainDialog::~MainDialog() {
     // 确保工作线程已经结束
     if (worker_thread_ != nullptr) {
@@ -29,7 +29,7 @@ MainDialog::~MainDialog() {
     
     instance_ = nullptr;
 }
-
+// 创建GUI对话框
 bool MainDialog::Create(HINSTANCE hInstance) {
     hwnd_ = CreateDialogParam(hInstance, MAKEINTRESOURCE(IDD_WAVSPLITCHANNEL_DIALOG), nullptr,
                             DialogProc, reinterpret_cast<LPARAM>(this));
@@ -54,7 +54,7 @@ struct ListItemUpdate {
     int sub_item_index;
     std::wstring* text;
 };
-
+// GUI界面控制
 INT_PTR CALLBACK MainDialog::DialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     if (message == WM_INITDIALOG) {
         SetWindowLongPtr(hwnd, DWLP_USER, lParam);
@@ -122,12 +122,12 @@ INT_PTR CALLBACK MainDialog::DialogProc(HWND hwnd, UINT message, WPARAM wParam, 
     }
     return FALSE;
 }
-
+// 程序入口
 INT_PTR MainDialog::OnInitDialog() {
     InitializeControls();
     return static_cast<INT_PTR>(TRUE);
 }
-
+// GUI界面按钮功能
 INT_PTR MainDialog::OnCommand(WPARAM wParam, LPARAM lParam) {
     switch (LOWORD(wParam)) {
         case IDM_IMPORT:
@@ -142,7 +142,7 @@ INT_PTR MainDialog::OnCommand(WPARAM wParam, LPARAM lParam) {
     }
     return static_cast<INT_PTR>(FALSE);
 }
-
+// 鼠标右键功能
 INT_PTR MainDialog::OnNotify(WPARAM wParam, LPARAM lParam) {
     LPNMHDR pnmh = reinterpret_cast<LPNMHDR>(lParam);
     if (pnmh->idFrom == IDC_FILE_LIST) {
@@ -190,7 +190,7 @@ INT_PTR MainDialog::OnNotify(WPARAM wParam, LPARAM lParam) {
     }
     return static_cast<INT_PTR>(FALSE);
 }
-
+//定时器, 不再更新状态文本
 INT_PTR MainDialog::OnTimer(WPARAM wParam) {
     if (wParam == 1) { // 进度更新定时器
         // 计算总体进度
@@ -227,12 +227,12 @@ INT_PTR MainDialog::OnTimer(WPARAM wParam) {
         UpdateProgress(overall_progress);
         
         // 更新状态文本 - 显示更详细的进度信息
-        std::wstring status = L"正在处理文件... " + std::to_wstring(completed_files_) + L"/" + std::to_wstring(total_files_);
+        // std::wstring status = L"正在处理文件... " + std::to_wstring(completed_files_) + L"/" + std::to_wstring(total_files_);
         //status += L" (" + std::to_wstring(overall_progress) + L"%)";
         //if (active_threads_ > 0) {
         //    status += L" - 活动线程: " + std::to_wstring(active_threads_);
         //}
-        UpdateStatus(status);
+        // UpdateStatus(status);
         
         // 检查工作线程是否完成
         if (is_processing_ && worker_thread_ != nullptr) {
@@ -250,13 +250,13 @@ INT_PTR MainDialog::OnTimer(WPARAM wParam) {
                     KillTimer(hwnd_, 1);
                     
                     // 计算总耗时
-                    LARGE_INTEGER end_time, frequency;
-                    QueryPerformanceCounter(&end_time);
-                    QueryPerformanceFrequency(&frequency);
+                    // LARGE_INTEGER end_time, frequency;
+                    // QueryPerformanceCounter(&end_time);
+                    // QueryPerformanceFrequency(&frequency);
                     
-                    // 更新状态
-                    std::wstring complete_status = L"处理完成，共处理 " + std::to_wstring(completed_files_) + L" 个文件";
-                    UpdateStatus(complete_status);
+                    // // 更新状态
+                    // std::wstring complete_status = L"处理完成，共处理 " + std::to_wstring(completed_files_) + L" 个文件";
+                    // UpdateStatus(complete_status);
                 }
             }
         }
@@ -265,7 +265,7 @@ INT_PTR MainDialog::OnTimer(WPARAM wParam) {
     }
     return static_cast<INT_PTR>(FALSE);
 }
-
+//导入按钮
 void MainDialog::ImportFile() {
     IFileOpenDialog* pFileOpen;
     HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_ALL,
@@ -347,7 +347,7 @@ void MainDialog::ImportFile() {
         pFileOpen->Release();
     }
 }
-
+//开始处理按钮
 void MainDialog::SplitChannels() {
     if (file_list_.empty()) {
         MessageBox(hwnd_, L"请先导入文件", L"提示", MB_OK | MB_ICONINFORMATION);
@@ -433,7 +433,7 @@ void MainDialog::SplitChannels() {
         default: format.bits_per_sample = 16;
     }
 
-    // 设置通道数
+    // 设置通道数，若没有设置，默认为2通道
     format.num_channels = num_channels > 0 ? num_channels : 2;
     audio_processor_->SetAudioFormat(format);
 
@@ -447,7 +447,7 @@ void MainDialog::SplitChannels() {
         AudioProcessor::OutputFormat::WAV : AudioProcessor::OutputFormat::PCM;
     audio_processor_->SetOutputFormat(audio_output_format);
     
-    // 获取线程数设置
+    // 获取线程数设置，默认为5
     int thread_count = GetDlgItemInt(hwnd_, IDC_THREAD_COUNT, nullptr, FALSE);
     if (thread_count <= 0) {
         thread_count = 5; // 默认使用5个线程
@@ -455,7 +455,7 @@ void MainDialog::SplitChannels() {
     
     // 标记为正在处理
     is_processing_ = true;
-    UpdateStatus(L"正在处理文件...");
+    UpdateStatus(L"开始处理文件...");
     
     // 初始化线程池
     InitThreadPool(thread_count);
@@ -481,11 +481,11 @@ void MainDialog::SplitChannels() {
         return;
     }
     
-    // 设置定时器，定期更新UI
-    SetTimer(hwnd_, 1, 100, nullptr);
+    // 启动定时器，每200ms，定期更新UI
+    SetTimer(hwnd_, 1, 200, nullptr);
 }
 
-// 工作线程函数，处理所有文件
+// 开始处理按钮，启动的工作线程，处理所有文件
 DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
     MainDialog* dlg = static_cast<MainDialog*>(lpParam);
     if (!dlg) return 1;
@@ -500,7 +500,7 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
     AudioProcessor::OutputFormat output_format = dlg->audio_processor_->GetOutputFormat();
     
     // 更新状态
-    PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(L"正在准备处理文件...")), 0);
+    // PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(L"准备处理文件...")), 0);
     
     // 将所有文件添加到任务队列
     for (const auto& file : dlg->file_list_) {
@@ -518,11 +518,11 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
     }
     
     // 更新状态
-    PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(L"正在处理文件...")), 0);
+    // PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(L"正在处理文件...")), 0);
     
     // 等待所有任务完成
     while (dlg->completed_files_ < dlg->total_files_ && !dlg->shutdown_threads_) {
-        Sleep(100); // 每100毫秒检查一次
+        Sleep(200); // 每100毫秒检查一次
         
         // 更新总体进度
         int overall_progress = static_cast<int>((dlg->completed_files_ * 100) / dlg->total_files_);
@@ -639,8 +639,8 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
             thread_audio_processor->SetOutputFormat(task.output_format);
             
             // 发送状态更新消息
-            std::wstring status_msg = L"正在处理: " + filename;
-            PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
+            // std::wstring status_msg = L"正在处理: " + filename;
+            // PostMessage(dlg->hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
             
             // 设置进度回调函数，用于更新特定文件的进度
             thread_audio_processor->SetProgressCallback([dlg, task, file_index](int progress) {
