@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <commctrl.h>
 #include <map>
+#include <shellapi.h>
 
 
 MainDialog* MainDialog::instance_ = nullptr;
@@ -73,6 +74,8 @@ INT_PTR CALLBACK MainDialog::DialogProc(HWND hwnd, UINT message, WPARAM wParam, 
             return dlg->OnNotify(wParam, lParam);
         case WM_TIMER:
             return dlg->OnTimer(wParam);
+        case WM_DROPFILES:
+            return dlg->OnDropFiles(wParam);
         case WM_CLOSE:
             dlg->SaveSettings();
             DestroyWindow(hwnd);
@@ -807,6 +810,123 @@ void MainDialog::UpdateStatus(const std::wstring& status) {
     SetWindowText(status_text_, status.c_str());
 }
 
+// 处理文件拖放
+INT_PTR MainDialog::OnDropFiles(WPARAM wParam) {
+    HDROP hDrop = reinterpret_cast<HDROP>(wParam);
+    if (!hDrop) return FALSE;
+    
+    // 获取拖放的文件数量
+    UINT fileCount = DragQueryFile(hDrop, 0xFFFFFFFF, nullptr, 0);
+    
+    // 处理每个拖放的文件或文件夹
+    for (UINT i = 0; i < fileCount; i++) {
+        // 获取文件路径
+        WCHAR filePath[MAX_PATH];
+        if (DragQueryFile(hDrop, i, filePath, MAX_PATH)) {
+            // 检查是文件还是文件夹
+            DWORD fileAttr = GetFileAttributes(filePath);
+            if (fileAttr != INVALID_FILE_ATTRIBUTES) {
+                if (fileAttr & FILE_ATTRIBUTE_DIRECTORY) {
+                    // 是文件夹，递归遍历
+                    ProcessDroppedFolder(filePath);
+                } else {
+                    // 是文件，检查扩展名
+                    std::wstring extension = PathFindExtension(filePath);
+                    if (_wcsicmp(extension.c_str(), L".wav") == 0 || _wcsicmp(extension.c_str(), L".pcm") == 0) {
+                        // 添加到文件列表
+                        AddFileToList(filePath);
+                    }
+                }
+            }
+        }
+    }
+    
+    // 释放拖放句柄
+    DragFinish(hDrop);
+    return TRUE;
+}
+
+// 递归处理拖放的文件夹
+void MainDialog::ProcessDroppedFolder(const std::wstring& folderPath) {
+    // 构建搜索路径
+    std::wstring searchPath = folderPath + L"\\*";
+    
+    // 查找第一个文件
+    WIN32_FIND_DATA findData;
+    HANDLE hFind = FindFirstFile(searchPath.c_str(), &findData);
+    
+    if (hFind != INVALID_HANDLE_VALUE) {
+        do {
+            // 跳过 . 和 ..
+            if (wcscmp(findData.cFileName, L".") == 0 || wcscmp(findData.cFileName, L"..") == 0) {
+                continue;
+            }
+            
+            // 构建完整路径
+            std::wstring fullPath = folderPath + L"\\" + findData.cFileName;
+            
+            if (findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                // 是子文件夹，递归处理
+                ProcessDroppedFolder(fullPath);
+            } else {
+                // 是文件，检查扩展名
+                std::wstring extension = PathFindExtension(findData.cFileName);
+                if (_wcsicmp(extension.c_str(), L".wav") == 0 || _wcsicmp(extension.c_str(), L".pcm") == 0) {
+                    // 添加到文件列表
+                    AddFileToList(fullPath);
+                }
+            }
+        } while (FindNextFile(hFind, &findData));
+        
+        FindClose(hFind);
+    }
+}
+
+// 添加文件到列表
+void MainDialog::AddFileToList(const std::wstring& filePath) {
+    // 检查文件是否已经在列表中
+    for (const auto& existingFile : file_list_) {
+        if (_wcsicmp(existingFile.c_str(), filePath.c_str()) == 0) {
+            // 文件已存在，跳过
+            return;
+        }
+    }
+    
+    // 添加文件到列表
+    file_list_.push_back(filePath);
+    
+    // 更新列表视图
+    LVITEM lvi = { 0 };
+    lvi.mask = LVIF_TEXT;
+    lvi.iItem = ListView_GetItemCount(list_view_);
+    lvi.iSubItem = 0;
+    lvi.pszText = PathFindFileName(filePath.c_str());
+    ListView_InsertItem(list_view_, &lvi);
+    
+    // 获取文件大小并格式化
+    WIN32_FILE_ATTRIBUTE_DATA fileAttr;
+    if (GetFileAttributesEx(filePath.c_str(), GetFileExInfoStandard, &fileAttr)) {
+        ULARGE_INTEGER fileSize;
+        fileSize.HighPart = fileAttr.nFileSizeHigh;
+        fileSize.LowPart = fileAttr.nFileSizeLow;
+        
+        WCHAR sizeBuf[32];
+        if (fileSize.QuadPart < 1024) {
+            swprintf_s(sizeBuf, L"%llu B", fileSize.QuadPart);
+        } else if (fileSize.QuadPart < 1024 * 1024) {
+            swprintf_s(sizeBuf, L"%.2f KB", fileSize.QuadPart / 1024.0);
+        } else if (fileSize.QuadPart < 1024 * 1024 * 1024) {
+            swprintf_s(sizeBuf, L"%.2f MB", fileSize.QuadPart / (1024.0 * 1024.0));
+        } else {
+            swprintf_s(sizeBuf, L"%.2f GB", fileSize.QuadPart / (1024.0 * 1024.0 * 1024.0));
+        }
+        
+        lvi.iSubItem = 1;
+        lvi.pszText = sizeBuf;
+        ListView_SetItem(list_view_, &lvi);
+    }
+}
+
 void MainDialog::InitializeControls() {
     // 获取控件句柄
     list_view_ = GetDlgItem(hwnd_, IDC_FILE_LIST);
@@ -816,6 +936,9 @@ void MainDialog::InitializeControls() {
     HWND bits_per_sample_combo = GetDlgItem(hwnd_, IDC_BITS_PER_SAMPLE);
     HWND num_channels_combo = GetDlgItem(hwnd_, IDC_NUM_CHANNELS);
     HWND num_thread_combo = GetDlgItem(hwnd_, IDC_THREAD_COUNT);
+    
+    // 启用拖放功能
+    DragAcceptFiles(hwnd_, TRUE);
 
     // 初始化列表视图
     LVCOLUMN lvc = { 0 };

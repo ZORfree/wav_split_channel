@@ -33,6 +33,7 @@ private:
     INT_PTR OnCommand(WPARAM wParam, LPARAM lParam);
     INT_PTR OnNotify(WPARAM wParam, LPARAM lParam);
     INT_PTR OnTimer(WPARAM wParam);
+    INT_PTR OnDropFiles(WPARAM wParam);
 
     // 功能实现
     void ImportFile();
@@ -40,6 +41,8 @@ private:
     void UpdateProgress(int progress);
     void UpdateStatus(const std::wstring& status);
     void InitializeControls();
+    void ProcessDroppedFolder(const std::wstring& folderPath);
+    void AddFileToList(const std::wstring& filePath);
 
     // 设置相关
     void LoadSettings();
