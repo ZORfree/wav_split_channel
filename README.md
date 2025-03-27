@@ -4,6 +4,7 @@
 
 ## 简介
 专业的WAV/PCM音频文件通道分离工具，支持多线程处理和实时进度显示。通过可视化界面轻松实现音频文件的通道分离和格式转换。
+
 全系列由AI完成
 
 ## 功能特性
@@ -16,7 +17,7 @@
 ## 安装说明
 1. 克隆仓库：
 ```bash
-git clone https://github.com/yourusername/wav_split_channel.git
+git clone https://github.com/ZORfree/wav_split_channel.git
 ```
 2. 使用Visual Studio 2022打开解决方案文件
 3. 编译并运行（需安装Windows SDK 10.0+）
@@ -31,10 +32,10 @@ git clone https://github.com/yourusername/wav_split_channel.git
 ## 配置选项
 | 参数          | 选项                      |
 |---------------|--------------------------|
-| 采样率        | 8000-192000 Hz           |
-| 位深度        | 16bit/24bit/32bit        |
-| 输出格式      | WAV/PCM                  |
-| 线程数        | 1-8（建议根据CPU核心数填写）|
+| 采样率        | (必选)                    |
+| 位深度        | (必选)                    |
+| 输出格式      | (必选)                    |
+| 线程数        | (必选)                    |
 
 ## 贡献指南
 欢迎提交Issue或PR！请遵循以下规范：
@@ -59,7 +60,7 @@ Professional WAV/PCM audio channel splitting tool with multi-threading and real-
 ## Installation
 1. Clone repo:
 ```bash
-git clone https://github.com/yourusername/wav_split_channel.git
+git clone https://github.com/ZORfree/wav_split_channel.git
 ```
 2. Open solution in Visual Studio 2022
 3. Build & Run (Requires Windows SDK 10.0+)
