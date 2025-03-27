@@ -656,6 +656,10 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
             
             // 增加错误文件计数
             dlg->error_files_++;
+            
+            // 将失败文件的进度设置为100%，确保总进度计算正确
+            std::lock_guard<std::mutex> lock(dlg->progress_mutex_);
+            dlg->file_progress_[task.file_path] = 100;
         } else {
             // 设置音频格式
             thread_audio_processor->SetAudioFormat(task.format);
@@ -712,6 +716,10 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
                 
                 // 增加错误文件计数
                 dlg->error_files_++;
+                
+                // 将失败文件的进度设置为100%，确保总进度计算正确
+                std::lock_guard<std::mutex> lock(dlg->progress_mutex_);
+                dlg->file_progress_[task.file_path] = 100;
             }
             else if (file_index >= 0) {
                 // 处理成功，设置进度为100%
@@ -778,11 +786,13 @@ void MainDialog::UpdateProgress(int progress) {
     // 确保进度值在有效范围内（0-100）
     if (progress < 0) progress = 0;
     if (progress > 100) progress = 100;
-	//获取当前的进度值，如果当前进度值大于新的进度值，则不更新
-	int current_progress = SendMessage(progress_bar_, PBM_GETPOS, 0, 0);
-	if (current_progress >= progress) return;
-
-
+    
+    // 获取当前的进度值
+    int current_progress = SendMessage(progress_bar_, PBM_GETPOS, 0, 0);
+    
+    // 只有当新进度大于当前进度时才更新，避免进度条倒退
+    // 但不要完全阻止相等的进度更新，这可能导致进度停滞
+    if (current_progress >= progress) return;
     
     // 更新进度条位置
     SendMessage(progress_bar_, PBM_SETPOS, progress, 0);
