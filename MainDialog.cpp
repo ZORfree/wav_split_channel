@@ -6,7 +6,7 @@
 #include <commctrl.h>
 #include <map>
 #include <shellapi.h>
-
+#include <algorithm>
 
 MainDialog* MainDialog::instance_ = nullptr;
 
