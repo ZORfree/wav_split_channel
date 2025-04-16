@@ -511,12 +511,17 @@ DWORD WINAPI MainDialog::ProcessFilesThreadProc(LPVOID lpParam) {
         // 获取输入文件的目录作为输出目录
         std::wstring output_dir = std::filesystem::path(file).parent_path().wstring();
         
+        // 获取后缀符号
+        WCHAR suffix[256];
+        GetDlgItemText(dlg->hwnd_, IDC_SUFFIX_EDIT, suffix, 256);
+
         // 创建任务并添加到队列
         FileTask task;
         task.file_path = file;
         task.output_dir = output_dir;
         task.format = format;
         task.output_format = output_format;
+        task.suffix = suffix;
         
         dlg->AddTask(task);
     }
@@ -700,7 +705,7 @@ DWORD WINAPI MainDialog::WorkerThreadProc(LPVOID lpParam) {
             });
             
             // 执行通道拆分
-            if (!thread_audio_processor->SplitChannels(task.output_dir)) {
+            if (!thread_audio_processor->SplitChannels(task.output_dir, task.suffix)) {
                 // 发送错误消息
                 std::wstring error_msg = L"处理音频文件失败: " + filename;
                 PostMessage(dlg->hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(error_msg)), 0);
@@ -776,7 +781,10 @@ bool MainDialog::ProcessSingleFile(const std::wstring& file, const std::wstring&
     PostMessage(hwnd_, WM_USER + 2, reinterpret_cast<WPARAM>(new std::wstring(status_msg)), 0);
     
     // 执行通道拆分
-    if (!audio_processor_->SplitChannels(output_dir)) {
+    // 获取后缀符号
+    WCHAR suffix[256];
+    GetDlgItemText(hwnd_, IDC_SUFFIX_EDIT, suffix, 256);
+    if (!audio_processor_->SplitChannels(output_dir, suffix)) {
         // 发送错误消息
         PostMessage(hwnd_, WM_USER + 3, reinterpret_cast<WPARAM>(new std::wstring(L"处理音频文件失败")), 0);
         return false;
@@ -1041,6 +1049,13 @@ void MainDialog::LoadSettings() {
             SetDlgItemInt(hwnd_, IDC_THREAD_COUNT, 5, FALSE); // 默认5个线程
         }
 
+        // 加载后缀符号设置
+        WCHAR suffix[256];
+        size = sizeof(suffix);
+        if (RegQueryValueEx(hKey, L"Suffix", nullptr, nullptr, (LPBYTE)suffix, &size) == ERROR_SUCCESS) {
+            SetDlgItemText(hwnd_, IDC_SUFFIX_EDIT, suffix);
+        }
+
         RegCloseKey(hKey);
     }
 }
@@ -1066,9 +1081,13 @@ void MainDialog::SaveSettings() {
         RegSetValueEx(hKey, L"OutputFormat", 0, REG_DWORD, (LPBYTE)&value, sizeof(DWORD));
         
         // 保存线程数设置
-        HWND thread_count_combo = GetDlgItem(hwnd_, IDC_THREAD_COUNT);
         value = GetDlgItemInt(hwnd_, IDC_THREAD_COUNT, nullptr, FALSE);
         RegSetValueEx(hKey, L"ThreadCount", 0, REG_DWORD, (LPBYTE)&value, sizeof(DWORD));
+
+        // 保存后缀符号设置
+        WCHAR suffix[256];
+        GetDlgItemText(hwnd_, IDC_SUFFIX_EDIT, suffix, 256);
+        RegSetValueEx(hKey, L"Suffix", 0, REG_SZ, (LPBYTE)suffix, (wcslen(suffix) + 1) * sizeof(WCHAR));
 
         RegCloseKey(hKey);
     }

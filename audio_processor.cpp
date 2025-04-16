@@ -96,7 +96,7 @@ bool AudioProcessor::LoadPcmFile(const std::wstring& file_path) {
     return true;
 }
 
-bool AudioProcessor::SplitChannels(const std::wstring& output_dir) {
+bool AudioProcessor::SplitChannels(const std::wstring& output_dir, const std::wstring& suffix) {
     if (audio_data_.empty() || !wav_header_) {
         return false;
     }
@@ -142,7 +142,7 @@ bool AudioProcessor::SplitChannels(const std::wstring& output_dir) {
     
     for (int ch = 0; ch < num_channels; ++ch) {
         std::wstring output_path = (std::filesystem::path(parent_path) / 
-            (stem + L"_channel" + std::to_wstring(ch + 1) + 
+            (stem + (suffix.empty() ? L"" : suffix) + std::to_wstring(ch + 1) + 
              (output_format_ == OutputFormat::WAV ? L".wav" : L".pcm"))).wstring();
         if (!WriteSingleChannelWav(output_path, channel_data[ch], ch)) {
             return false;

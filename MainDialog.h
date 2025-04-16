@@ -53,6 +53,7 @@ private:
     HWND list_view_;
     HWND progress_bar_;
     HWND status_text_;
+    HWND suffix_edit_;  // 后缀符号输入框
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::vector<std::wstring> file_list_;
     std::map<std::wstring, int> file_progress_; // 存储每个文件的处理进度
@@ -68,6 +69,7 @@ private:
         std::wstring output_dir;
         AudioProcessor::AudioFormat format;
         AudioProcessor::OutputFormat output_format;
+        std::wstring suffix;
     };
     
     std::queue<FileTask> task_queue_;

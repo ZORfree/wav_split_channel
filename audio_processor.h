@@ -47,7 +47,7 @@ public:
     bool LoadPcmFile(const std::wstring& file_path);
     
     // 拆分通道
-    bool SplitChannels(const std::wstring& output_dir);
+    bool SplitChannels(const std::wstring& output_dir, const std::wstring& suffix = L"");
     
     // 获取和设置音频格式
     void SetAudioFormat(const AudioFormat& format);

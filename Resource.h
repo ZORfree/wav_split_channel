@@ -24,7 +24,8 @@
 #define IDC_NUM_CHANNELS               1005
 #define IDC_OUTPUT_FORMAT              1006
 #define IDC_THREAD_COUNT               1007
-#define IDD_SETTINGS_DIALOG             1008
+#define IDC_SUFFIX_EDIT                1008
+#define IDD_SETTINGS_DIALOG             1009
 #ifndef IDC_STATIC
 #define IDC_STATIC				-1
 #endif
